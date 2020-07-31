@@ -8,6 +8,9 @@
 #include <linux/rculist.h>
 #include <net/inetpeer.h>
 #include <net/tcp.h>
+#ifdef CONFIG_MPTCP
+#include <net/mptcp.h>
+#endif
 
 int sysctl_tcp_fastopen __read_mostly = TFO_CLIENT_ENABLE;
 
@@ -177,6 +180,9 @@ static struct sock *tcp_fastopen_create_child(struct sock *sk,
 	struct tcp_sock *tp;
 	struct request_sock_queue *queue = &inet_csk(sk)->icsk_accept_queue;
 	struct sock *child;
+#ifdef CONFIG_MPTCP
+	struct sock *meta_sk;
+#endif
 	bool own_req;
 
 	req->num_retrans = 0;
@@ -215,20 +221,39 @@ static struct sock *tcp_fastopen_create_child(struct sock *sk,
 				  TCP_TIMEOUT_INIT, TCP_RTO_MAX);
 
 	atomic_set(&req->rsk_refcnt, 2);
-
-	/* Now finish processing the fastopen child socket. */
-	inet_csk(child)->icsk_af_ops->rebuild_header(child);
-	tcp_init_congestion_control(child);
-	tcp_mtup_init(child);
-	tcp_init_metrics(child);
-	tcp_init_buffer_space(child);
-
+#ifdef CONFIG_MPTCP
 	tp->rcv_nxt = TCP_SKB_CB(skb)->seq + 1;
 
 	tcp_fastopen_add_skb(child, skb);
 
 	tcp_rsk(req)->rcv_nxt = tp->rcv_nxt;
 	tp->rcv_wup = tp->rcv_nxt;
+
+	meta_sk = child;
+	if (!mptcp_check_req_fastopen(meta_sk, req)) {
+		child = tcp_sk(meta_sk)->mpcb->master_sk;
+		tp = tcp_sk(child);
+	}
+#endif
+	/* Now finish processing the fastopen child socket. */
+	inet_csk(child)->icsk_af_ops->rebuild_header(child);
+	tcp_init_congestion_control(child);
+	tcp_mtup_init(child);
+	tcp_init_metrics(child);
+#ifdef CONFIG_MPTCP
+	tp->ops->init_buffer_space(child);
+#else
+	tcp_init_buffer_space(child);
+#endif
+
+#ifndef CONFIG_MPTCP
+	tp->rcv_nxt = TCP_SKB_CB(skb)->seq + 1;
+
+	tcp_fastopen_add_skb(child, skb);
+
+	tcp_rsk(req)->rcv_nxt = tp->rcv_nxt;
+	tp->rcv_wup = tp->rcv_nxt;
+#endif
 	/* tcp_conn_request() is sending the SYNACK,
 	 * and queues the child into listener accept queue.
 	 */
@@ -326,3 +351,57 @@ fastopen:
 	*foc = valid_foc;
 	return NULL;
 }
+
+bool tcp_fastopen_cookie_check(struct sock *sk, u16 *mss,
+			       struct tcp_fastopen_cookie *cookie)
+{
+	unsigned long last_syn_loss = 0;
+	int syn_loss = 0;
+
+	tcp_fastopen_cache_get(sk, mss, cookie, &syn_loss, &last_syn_loss);
+
+	/* Recurring FO SYN losses: no cookie or data in SYN */
+	if (syn_loss > 1 &&
+	    time_before(jiffies, last_syn_loss + (60*HZ << syn_loss))) {
+		cookie->len = -1;
+		return false;
+	}
+	if (sysctl_tcp_fastopen & TFO_CLIENT_NO_COOKIE) {
+		cookie->len = -1;
+		return true;
+	}
+	return cookie->len > 0;
+}
+
+/* This function checks if we want to defer sending SYN until the first
+ * write().  We defer under the following conditions:
+ * 1. fastopen_connect sockopt is set
+ * 2. we have a valid cookie
+ * Return value: return true if we want to defer until application writes data
+ *               return false if we want to send out SYN immediately
+ */
+bool tcp_fastopen_defer_connect(struct sock *sk, int *err)
+{
+	struct tcp_fastopen_cookie cookie = { .len = 0 };
+	struct tcp_sock *tp = tcp_sk(sk);
+	u16 mss;
+
+	if (tp->fastopen_connect && !tp->fastopen_req) {
+		if (tcp_fastopen_cookie_check(sk, &mss, &cookie)) {
+			inet_sk(sk)->defer_connect = 1;
+			return true;
+		}
+
+		/* Alloc fastopen_req in order for FO option to be included
+		 * in SYN
+		 */
+		tp->fastopen_req = kzalloc(sizeof(*tp->fastopen_req),
+					   sk->sk_allocation);
+		if (tp->fastopen_req)
+			tp->fastopen_req->cookie = cookie;
+		else
+			*err = -ENOBUFS;
+	}
+	return false;
+}
+EXPORT_SYMBOL(tcp_fastopen_defer_connect);

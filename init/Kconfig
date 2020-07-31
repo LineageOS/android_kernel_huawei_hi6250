@@ -48,7 +48,7 @@ config BROKEN_ON_SMP
 
 config INIT_ENV_ARG_LIMIT
 	int
-	default 32 if !UML
+	default 128 if !UML
 	default 128 if UML
 	help
 	  Maximum of each of the number of arguments and environment
@@ -399,6 +399,16 @@ config IRQ_TIME_ACCOUNTING
 	  small performance impact.
 
 	  If in doubt, say N here.
+
+config SCHED_WALT
+        bool "Support window based load tracking"
+        depends on SMP
+        select IRQ_TIME_ACCOUNTING
+        help
+        This feature will allow the scheduler to maintain a tunable window
+	based set of metrics for tasks and runqueues. These metrics can be
+	used to guide task placement as well as task frequency requirements
+	for cpufreq governors.
 
 config BSD_PROCESS_ACCT
 	bool "BSD Process Accounting"
@@ -955,6 +965,13 @@ config NUMA_BALANCING_DEFAULT_ENABLED
 	  If set, automatic NUMA balancing will be enabled if running on a NUMA
 	  machine.
 
+config BOOST_KILL
+	bool "boost kill"
+	default n
+	help
+	  if set, the process to be killed will be move to fast cpu and its nice
+	  value will also set to -20.
+
 menuconfig CGROUPS
 	bool "Control Group support"
 	select KERNFS
@@ -970,6 +987,106 @@ menuconfig CGROUPS
 	  Say N if unsure.
 
 if CGROUPS
+
+config CGROUP_DEBUG
+	bool "Example debug cgroup subsystem"
+	default n
+	help
+	  This option enables a simple cgroup subsystem that
+	  exports useful debugging information about the cgroups
+	  framework.
+
+	  Say N if unsure.
+
+config CGROUP_FREEZER
+	bool "Freezer cgroup subsystem"
+	help
+	  Provides a way to freeze and unfreeze all tasks in a
+	  cgroup.
+source "kernel/cgroup_huawei/Kconfig"
+
+config CGROUP_PIDS
+	bool "PIDs cgroup subsystem"
+	help
+	  Provides enforcement of process number limits in the scope of a
+	  cgroup. Any attempt to fork more processes than is allowed in the
+	  cgroup will fail. PIDs are fundamentally a global resource because it
+	  is fairly trivial to reach PID exhaustion before you reach even a
+	  conservative kmemcg limit. As a result, it is possible to grind a
+	  system to halt without being limited by other cgroup policies. The
+	  PIDs cgroup subsystem is designed to stop this from happening.
+
+	  It should be noted that organisational operations (such as attaching
+	  to a cgroup hierarchy will *not* be blocked by the PIDs subsystem),
+	  since the PIDs limit only affects a process's ability to fork, not to
+	  attach to a cgroup.
+
+config HW_CGROUP_IONICE
+	bool "ionice cgroup controller"
+	depends on BLOCK
+	help
+	  Provides a way to set ionice for tasks in a cgroup.
+	  It's useful in mobile devices where certain background apps
+	  are doing heavy io work.
+
+config CGROUP_IOLIMIT
+	bool "IO bandwidth limit cgroup subsystem"
+	help
+	  Provides a cgroup implementing for io bandwidth while a process
+	  in the cgroup read or write.
+
+config CGROUP_DEVICE
+	bool "Device controller for cgroups"
+	help
+	  Provides a cgroup implementing whitelists for devices which
+	  a process in the cgroup can mknod or open.
+
+config CPUSETS
+	bool "Cpuset support"
+	help
+	  This option will let you create and manage CPUSETs which
+	  allow dynamically partitioning a system into sets of CPUs and
+	  Memory Nodes and assigning tasks to run only within those sets.
+	  This is primarily useful on large SMP or NUMA systems.
+
+	  Say N if unsure.
+
+config PROC_PID_CPUSET
+	bool "Include legacy /proc/<pid>/cpuset file"
+	depends on CPUSETS
+	default y
+
+config CGROUP_CPUACCT
+	bool "Simple CPU accounting cgroup subsystem"
+	help
+	  Provides a simple Resource Controller for monitoring the
+	  total CPU consumed by the tasks in a cgroup.
+
+config CGROUP_SCHEDTUNE
+	bool "CFS tasks boosting cgroup subsystem (EXPERIMENTAL)"
+	depends on SCHED_TUNE
+	help
+	  This option provides the "schedtune" controller which improves the
+	  flexibility of the task boosting mechanism by introducing the support
+	  to define "per task" boost values.
+
+	  This new controller:
+	  1. allows only a two layers hierarchy, where the root defines the
+	     system-wide boost value and its direct childrens define each one a
+	     different "class of tasks" to be boosted with a different value
+	  2. supports up to 16 different task classes, each one which could be
+	     configured with a different boost value
+
+	  Say N if unsure.
+
+config HW_CGROUP_WORKINGSET
+	bool "workingset cgroup subsystem"
+	depends on CRYPTO_CRC32C
+	depends on TASK_DELAY_ACCT
+	help
+	  Provides a cgroup implementing filepage collector and prereader of workingset.
+	  This cgroup workingset for application, collect it touched filepages and
+	  preread those filepages.
 
 config PAGE_COUNTER
        bool
@@ -1154,6 +1271,19 @@ config CGROUP_PERF
 
 	  Say N if unsure.
 
+config CGROUP_BPF
+	bool "Support for eBPF programs attached to cgroups"
+	depends on BPF_SYSCALL
+	select SOCK_CGROUP_DATA
+	help
+	  Allow attaching eBPF programs to a cgroup using the bpf(2)
+	  syscall command BPF_PROG_ATTACH.
+
+	  In which context these programs are accessed depends on the type
+	  of attachment. For instance, programs that are attached using
+	  BPF_CGROUP_INET_INGRESS will be executed on the ingress path of
+	  inet sockets.
+
 config CGROUP_DEBUG
 	bool "Example controller"
 	default n
@@ -1162,6 +1292,10 @@ config CGROUP_DEBUG
 	  debugging information about the cgroups framework.
 
 	  Say N.
+
+config SOCK_CGROUP_DATA
+	bool
+	default n
 
 endif # CGROUPS
 
@@ -1236,6 +1370,111 @@ config NET_NS
 
 endif # NAMESPACES
 
+config HISI_EAS_SCHED
+	bool "Hisilicon EAS scheduler optimization"
+	default n
+	help
+	  Hisilicon EAS scheduler
+
+config HISI_MULTI_MARGIN
+	bool "Hisilicon EAS multiple margin"
+	depends on HISI_EAS_SCHED
+	default n
+	help
+	  Allow each cluster has its own capacity_margin/sd_capacity_margin.
+
+config HISI_RT_OPT
+	bool "hisilicon rt-threads optimization"
+	depends on HISI_EAS_SCHED
+	default n
+	help
+	  Limit rt-threads to slow cpus for power saving.
+
+config HISI_RT_CAS
+	bool "hisilicon rt-cas optimization"
+	depends on HISI_EAS_SCHED
+	default n
+	help
+	  allow rt-threads to be scheduled according to task_util.
+
+config HISI_RT_ACTIVE_LB
+	bool "hisilicon rt-cas optimization"
+	depends on HISI_EAS_SCHED
+	default n
+	help
+	  allow migrating running rt task.
+
+config HISI_ED_TASK
+	bool "Hisilicon early detection tasks for freq guidance"
+	depends on HISI_EAS_SCHED
+	default n
+	help
+	  early detection tasks for frequency guidance.
+
+config HISI_ED_TASK_RESET_AT_UPMIGRATION
+	bool "Reset ed task's run/wait time when migrate to faster cpu"
+	depends on HISI_ED_TASK
+	default n
+	help
+	  This feature reset an ed task's last_wake_ts/last_wake_wait_sum if
+	  task migrate to faster cpu. This prevents little core's ed task
+	  boost big core's freq when it upmigrate.
+	  However, it might be confusing if a task become ed task on big core
+	  by its earlier running time on little core. Disable this feature
+	  and do not reset ed task on migration is a better choice.
+
+config HISI_CPU_ISOLATION
+	bool "Hisilicon cpu isolation"
+	depends on SMP
+	default n
+	help
+	  This option enables cpu isolation, which implement an interface to
+	  userspace to isolate cpu dynamically, the isolated cpu will be
+	  unavailable to scheduler and load balancer, and all its non-pinned
+	  timers, IRQs and tasks will be migrated to other cpus, only pinned
+	  kthread and IRQS are still allowed to run, this achieve similar
+	  effect as hotplug but at lower latency cost.
+
+config HISI_CORE_CTRL
+	bool "HIsilicon core control"
+	depends on HISI_CPU_ISOLATION
+	default n
+	help
+	  This option enables the core control functionality in
+	  the scheduler. Core control automatically isolate and
+	  unisolate cores based on cpu load and utilization.
+
+config HISI_MIGRATION_NOTIFY
+	bool "Hisilicon task migration notify freq change"
+	depends on HISI_EAS_SCHED
+	default n
+	help
+	  tasks migration notify frequency change.
+
+config HISI_RTG
+	bool "Hisilicon related threads group"
+	depends on HISI_EAS_SCHED
+	depends on SCHED_WALT
+	default n
+	help
+	  set ux related threads into a group.
+
+config HISI_RTG_DEBUG
+	bool "Hisilicon related threads group debug"
+	depends on HISI_RTG
+	depends on HISI_DEBUG_FS
+	default n
+	help
+	  hisi related threads group debugfs.
+
+config HISI_CGROUP_RTG
+	bool "Hisilicon related threads group"
+	depends on HISI_RTG
+	depends on SCHED_TUNE
+	default n
+	help
+	  set schedtune group tasks into a rtg.
+
 config SCHED_AUTOGROUP
 	bool "Automatic process group scheduling"
 	select CGROUPS
@@ -1247,6 +1486,54 @@ config SCHED_AUTOGROUP
 	  of workloads isolates aggressive CPU burners (like build jobs) from
 	  desktop applications.  Task group autogeneration is currently based
 	  upon task session.
+
+config SCHED_TUNE
+	bool "Boosting for CFS tasks (EXPERIMENTAL)"
+	depends on SMP
+	help
+	  This option enables the system-wide support for task boosting.
+	  When this support is enabled a new sysctl interface is exposed to
+	  userspace via:
+	     /proc/sys/kernel/sched_cfs_boost
+	  which allows to set a system-wide boost value in range [0..100].
+
+	  The currently boosting strategy is implemented in such a way that:
+	  - a 0% boost value requires to operate in "standard" mode by
+	    scheduling all tasks at the minimum capacities required by their
+	    workload demand
+	  - a 100% boost value requires to push at maximum the task
+	    performances, "regardless" of the incurred energy consumption
+
+	  A boost value in between these two boundaries is used to bias the
+	  power/performance trade-off, the higher the boost value the more the
+	  scheduler is biased toward performance boosting instead of energy
+	  efficiency.
+
+	  Since this support exposes a single system-wide knob, the specified
+	  boost value is applied to all (CFS) tasks in the system.
+
+	  If unsure, say N.
+
+config DEFAULT_USE_ENERGY_AWARE
+	bool "Default to enabling the Energy Aware Scheduler feature"
+	default n
+	help
+	  This option defaults the ENERGY_AWARE scheduling feature to true,
+	  as without SCHED_DEBUG set this feature can't be enabled or disabled
+	  via sysctl.
+
+	  Say N if unsure.
+
+
+config DEFAULT_FBT_STRICT_ORDER
+	bool "Decide the priority of candidates selected by find_best_target()"
+	default n
+	help
+	  Enforce the priority of candidates selected by find_best_target()
+	  true: If the target CPU saves any energy, use that.
+	  false: Use whichever of target or backup saves most.
+
+	  Say N if unsure.
 
 config SYSFS_DEPRECATED
 	bool "Enable deprecated sysfs features to support old userspace tools"
@@ -1725,6 +2012,16 @@ config PERF_EVENTS
 
 	  Say Y if unsure.
 
+config PERF_USER_SHARE
+	bool "Perf event sharing with user-space"
+	help
+	  Say yes here to enable the user-space sharing of events. The events
+	  can be shared among other user-space events or with kernel created
+	  events that has the same config and type event attributes.
+
+	  Say N if unsure.
+
+
 config DEBUG_PERF_USE_VMALLOC
 	default n
 	bool "Debug: use vmalloc to back perf mmap() buffers"
@@ -1758,6 +2055,20 @@ config SLUB_DEBUG
 	  result in significant savings in code size. This also disables
 	  SLUB sysfs support. /sys/slab will not exist and there will be
 	  no support for cache validation etc.
+
+config SLUB_MEMCG_SYSFS_ON
+	default n
+	bool "Enable memcg SLUB sysfs support by default" if EXPERT
+	depends on SLUB && SYSFS && MEMCG
+	help
+	  SLUB creates a directory under /sys/kernel/slab for each
+	  allocation cache to host info and debug files. If memory
+	  cgroup is enabled, each cache can have per memory cgroup
+	  caches. SLUB can create the same sysfs directories for these
+	  caches under /sys/kernel/slab/CACHE/cgroup but it can lead
+	  to a very high number of debug files being created. This is
+	  controlled by slub_memcg_sysfs boot parameter and this
+	  config option determines the parameter's default value.
 
 config COMPAT_BRK
 	bool "Disable heap randomization"
@@ -1815,6 +2126,21 @@ config SLAB_FREELIST_RANDOM
 	  security feature reduces the predictability of the kernel slab
 	  allocator against heap overflows.
 
+
+config HW_SLUB_DF
+	bool "HUAWEI SLUB canaries"
+	default n
+	help
+	  Place canaries at first 8bit magic word of user data when free memory,
+	  check this magic when free to avoid double free.
+	  place canary_malloc before return to user.
+
+config HW_SLUB_DF_BUGON
+	bool "When canary status is wrong, throw out a bugon."
+	default n
+	depends on HW_SLUB_DF
+	help
+	  When canary status is wrong, throw out a bugon
 config SLUB_CPU_PARTIAL
 	default y
 	depends on SLUB && SMP
@@ -2106,7 +2432,7 @@ endif # MODULES
 
 config MODULES_TREE_LOOKUP
 	def_bool y
-	depends on PERF_EVENTS || TRACING
+	depends on PERF_EVENTS || TRACING || CFI_CLANG
 
 config INIT_ALL_POSSIBLE
 	bool
@@ -2135,3 +2461,7 @@ config ASN1
 	  functions to call on what tags.
 
 source "kernel/Kconfig.locks"
+source "kernel/hwcfs/Kconfig"
+source "net/network_aware/Kconfig"
+source "kernel/cpu_netlink/Kconfig"
+source "kernel/sched/Kconfig"

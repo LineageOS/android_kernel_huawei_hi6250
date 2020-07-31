@@ -47,7 +47,7 @@
  * If the page is in the bottom half, we have to use the top half. If
  * the page is in the top half, we have to use the bottom half:
  *
- * T = __virt_to_phys(__hyp_idmap_text_start)
+ * T = __pa_symbol(__hyp_idmap_text_start)
  * if (T & BIT(VA_BITS - 1))
  *	HYP_VA_MIN = 0  //idmap in upper half
  * else
@@ -290,7 +290,7 @@ static inline void __kvm_flush_dcache_pud(pud_t pud)
 	kvm_flush_dcache_to_poc(page_address(page), PUD_SIZE);
 }
 
-#define kvm_virt_to_phys(x)		__virt_to_phys((unsigned long)(x))
+#define kvm_virt_to_phys(x)		__pa_symbol(x)
 
 void kvm_set_way_flush(struct kvm_vcpu *vcpu);
 void kvm_toggle_cache(struct kvm_vcpu *vcpu, bool was_enabled);
@@ -382,30 +382,6 @@ static inline void *kvm_get_hyp_vector(void)
 }
 
 static inline int kvm_map_vectors(void)
-{
-	return 0;
-}
-#endif
-
-#ifdef CONFIG_ARM64_SSBD
-DECLARE_PER_CPU_READ_MOSTLY(u64, arm64_ssbd_callback_required);
-
-static inline int hyp_map_aux_data(void)
-{
-	int cpu, err;
-
-	for_each_possible_cpu(cpu) {
-		u64 *ptr;
-
-		ptr = per_cpu_ptr(&arm64_ssbd_callback_required, cpu);
-		err = create_hyp_mappings(ptr, ptr + 1, PAGE_HYP);
-		if (err)
-			return err;
-	}
-	return 0;
-}
-#else
-static inline int hyp_map_aux_data(void)
 {
 	return 0;
 }

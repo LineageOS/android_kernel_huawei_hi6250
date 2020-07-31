@@ -27,6 +27,10 @@
 
 #include <asm/sections.h>
 
+#ifdef CONFIG_HUAWEI_HIDESYMS
+#include <chipset_common/kernel_harden/litehide_symbols.h>
+#endif
+
 #ifdef CONFIG_KALLSYMS_ALL
 #define all_var 1
 #else
@@ -306,6 +310,24 @@ int kallsyms_lookup_size_offset(unsigned long addr, unsigned long *symbolsize,
 	return !!module_address_lookup(addr, symbolsize, offset, NULL, namebuf);
 }
 
+#ifdef CONFIG_CFI_CLANG
+/*
+ * LLVM appends .cfi to function names when CONFIG_CFI_CLANG is enabled,
+ * which causes confusion and potentially breaks user space tools, so we
+ * will strip the postfix from expanded symbol names.
+ */
+static inline void cleanup_symbol_name(char *s)
+{
+	char *res;
+
+	res = strrchr(s, '.');
+	if (res && !strcmp(res, ".cfi"))
+		*res = '\0';
+}
+#else
+static inline void cleanup_symbol_name(char *s) {}
+#endif
+
 /*
  * Lookup an address
  * - modname is set to NULL if it's in the kernel.
@@ -330,16 +352,23 @@ const char *kallsyms_lookup(unsigned long addr,
 				       namebuf, KSYM_NAME_LEN);
 		if (modname)
 			*modname = NULL;
-		return namebuf;
+		goto found;
 	}
 
 	/* See if it's in a module. */
-	return module_address_lookup(addr, symbolsize, offset, modname,
-				     namebuf);
+	if (!module_address_lookup(addr, symbolsize, offset, modname,
+				     namebuf))
+		return NULL;
+
+found:
+	cleanup_symbol_name(namebuf);
+	return namebuf;
 }
 
 int lookup_symbol_name(unsigned long addr, char *symname)
 {
+	int res;
+
 	symname[0] = '\0';
 	symname[KSYM_NAME_LEN - 1] = '\0';
 
@@ -350,15 +379,23 @@ int lookup_symbol_name(unsigned long addr, char *symname)
 		/* Grab name */
 		kallsyms_expand_symbol(get_symbol_offset(pos),
 				       symname, KSYM_NAME_LEN);
-		return 0;
+		goto found;
 	}
 	/* See if it's in a module. */
-	return lookup_module_symbol_name(addr, symname);
+	res = lookup_module_symbol_name(addr, symname);
+	if (res)
+		return res;
+
+found:
+	cleanup_symbol_name(symname);
+	return 0;
 }
 
 int lookup_symbol_attrs(unsigned long addr, unsigned long *size,
 			unsigned long *offset, char *modname, char *name)
 {
+	int res;
+
 	name[0] = '\0';
 	name[KSYM_NAME_LEN - 1] = '\0';
 
@@ -370,10 +407,16 @@ int lookup_symbol_attrs(unsigned long addr, unsigned long *size,
 		kallsyms_expand_symbol(get_symbol_offset(pos),
 				       name, KSYM_NAME_LEN);
 		modname[0] = '\0';
-		return 0;
+		goto found;
 	}
 	/* See if it's in a module. */
-	return lookup_module_symbol_attrs(addr, size, offset, modname, name);
+	res = lookup_module_symbol_attrs(addr, size, offset, modname, name);
+	if (res)
+		return res;
+
+found:
+	cleanup_symbol_name(name);
+	return 0;
 }
 
 /* Look up a kernel symbol and return it in a text buffer. */
@@ -556,6 +599,12 @@ static int s_show(struct seq_file *m, void *p)
 	/* Some debugging symbols have no name.  Ignore them. */
 	if (!iter->name[0])
 		return 0;
+
+#ifdef CONFIG_HUAWEI_HIDESYMS
+	/*  need to check if it's a hidden symbol. */
+	if (is_hide_symbols(iter->name) == true)
+		return 0;
+#endif
 
 	if (iter->module_name[0]) {
 		char type;

@@ -74,11 +74,25 @@
 #include <net/checksum.h>
 #include <net/inetpeer.h>
 #include <net/lwtunnel.h>
+#include <linux/bpf-cgroup.h>
 #include <linux/igmp.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_bridge.h>
 #include <linux/netlink.h>
 #include <linux/tcp.h>
+
+#ifdef CONFIG_HUAWEI_WIFI_WEIXIN_HONGBAO_ENABLE_PRIORITY
+#define WIFI_WEIXIN_HONGBAO_PROORITY 0x7
+extern uint8_t BST_FG_Proc_Send_RPacket_Priority(struct sock *pstSock);
+#endif
+
+#ifdef CONFIG_HUAWEI_BASTET
+int g_FastGrabDscp = 0;    /*fg app dscp value,get from hilink*/
+#endif
+
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+#include <hwnet/ipv4/wifi_delayst.h>
+#endif
 
 static int
 ip_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
@@ -287,6 +301,22 @@ static int ip_finish_output_gso(struct net *net, struct sock *sk,
 static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	unsigned int mtu;
+	int ret;
+#ifdef CONFIG_HW_STRICT_RST
+	ret = BPF_CGROUP_RUN_PROG_INET_EGRESS(sk, skb);
+	if (!sk || (sk && sk_fullsock(sk) && !sk->is_strict_rst)) {
+		if (ret) {
+			kfree_skb(skb);
+			return ret;
+		}
+	}
+#else
+	ret = BPF_CGROUP_RUN_PROG_INET_EGRESS(sk, skb);
+	if (ret) {
+		kfree_skb(skb);
+		return ret;
+	}
+#endif
 
 #if defined(CONFIG_NETFILTER) && defined(CONFIG_XFRM)
 	/* Policy lookup after SNAT yielded a new policy */
@@ -303,6 +333,20 @@ static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *sk
 		return ip_fragment(net, sk, skb, mtu, ip_finish_output2);
 
 	return ip_finish_output2(net, sk, skb);
+}
+
+static int ip_mc_finish_output(struct net *net, struct sock *sk,
+			       struct sk_buff *skb)
+{
+	int ret;
+
+	ret = BPF_CGROUP_RUN_PROG_INET_EGRESS(sk, skb);
+	if (ret) {
+		kfree_skb(skb);
+		return ret;
+	}
+
+	return dev_loopback_xmit(net, sk, skb);
 }
 
 int ip_mc_output(struct net *net, struct sock *sk, struct sk_buff *skb)
@@ -342,7 +386,7 @@ int ip_mc_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 			if (newskb)
 				NF_HOOK(NFPROTO_IPV4, NF_INET_POST_ROUTING,
 					net, sk, newskb, NULL, newskb->dev,
-					dev_loopback_xmit);
+					ip_mc_finish_output);
 		}
 
 		/* Multicasts with ttl 0 must not go beyond the host */
@@ -358,7 +402,7 @@ int ip_mc_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 		if (newskb)
 			NF_HOOK(NFPROTO_IPV4, NF_INET_POST_ROUTING,
 				net, sk, newskb, NULL, newskb->dev,
-				dev_loopback_xmit);
+				ip_mc_finish_output);
 	}
 
 	return NF_HOOK_COND(NFPROTO_IPV4, NF_INET_POST_ROUTING,
@@ -376,6 +420,11 @@ int ip_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	skb->dev = dev;
 	skb->protocol = htons(ETH_P_IP);
 
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+	if(DELAY_STATISTIC_SWITCH_ON) {
+		delay_record_ip_combine(skb,TP_SKB_DIRECT_SND);
+	}
+#endif
 	return NF_HOOK_COND(NFPROTO_IPV4, NF_INET_POST_ROUTING,
 			    net, sk, skb, NULL, dev,
 			    ip_finish_output,
@@ -448,6 +497,15 @@ packet_routed:
 	if (inet_opt && inet_opt->opt.is_strictroute && rt->rt_uses_gateway)
 		goto no_route;
 
+#ifdef CONFIG_HUAWEI_BASTET
+	/*if get dscp value and this socket belong to fg, modify dscp to support high pri transmission*/
+	if (g_FastGrabDscp != 0 && sk->fg_Spec > 0 && inet->tos == 0)
+	{
+		/*dscp is the highest 6 bits of tos*/
+		inet->tos = (((__u8)g_FastGrabDscp) << 2);
+	}
+#endif
+
 	/* OK, we know where to send it, allocate and build IP header. */
 	skb_push(skb, sizeof(struct iphdr) + (inet_opt ? inet_opt->opt.optlen : 0));
 	skb_reset_network_header(skb);
@@ -474,7 +532,13 @@ packet_routed:
 	/* TODO : should we use skb->sk here instead of sk ? */
 	skb->priority = sk->sk_priority;
 	skb->mark = sk->sk_mark;
-
+#ifdef CONFIG_HUAWEI_BASTET
+#ifdef CONFIG_HUAWEI_WIFI_WEIXIN_HONGBAO_ENABLE_PRIORITY
+	if(1 == BST_FG_Proc_Send_RPacket_Priority(sk)) {
+		skb->priority = WIFI_WEIXIN_HONGBAO_PROORITY;
+	}
+#endif
+#endif
 	res = ip_local_out(net, sk, skb);
 	rcu_read_unlock();
 	return res;
@@ -502,6 +566,11 @@ static void ip_copy_metadata(struct sk_buff *to, struct sk_buff *from)
 	/* Copy the flags to each fragment. */
 	IPCB(to)->flags = IPCB(from)->flags;
 
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+	if(DELAY_STATISTIC_SWITCH_ON) {
+		MEMCPY_SKB_CB(to,from);
+	}
+#endif
 #ifdef CONFIG_NET_SCHED
 	to->tc_index = from->tc_index;
 #endif
@@ -1600,7 +1669,8 @@ void ip_send_unicast_reply(struct sock *sk, struct sk_buff *skb,
 			   RT_SCOPE_UNIVERSE, ip_hdr(skb)->protocol,
 			   ip_reply_arg_flowi_flags(arg),
 			   daddr, saddr,
-			   tcp_hdr(skb)->source, tcp_hdr(skb)->dest);
+			   tcp_hdr(skb)->source, tcp_hdr(skb)->dest,
+			   arg->uid);
 	security_skb_classify_flow(skb, flowi4_to_flowi(&fl4));
 	rt = ip_route_output_key(net, &fl4);
 	if (IS_ERR(rt))

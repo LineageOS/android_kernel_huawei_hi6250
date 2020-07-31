@@ -42,6 +42,14 @@ extern void proc_remove(struct proc_dir_entry *);
 extern void remove_proc_entry(const char *, struct proc_dir_entry *);
 extern int remove_proc_subtree(const char *, struct proc_dir_entry *);
 
+#ifdef CONFIG_SCHED_HWSTATUS
+extern void sched_hwstatus_updatefg(pid_t pid,pid_t tgid);
+#endif
+
+#ifdef CONFIG_HISI_SWAP_ZDATA
+extern void exit_proc_reclaim(struct task_struct *tsk);
+#endif
+
 #else /* CONFIG_PROC_FS */
 
 static inline void proc_root_init(void)
@@ -73,6 +81,12 @@ static inline void proc_remove(struct proc_dir_entry *de) {}
 static inline int remove_proc_subtree(const char *name, struct proc_dir_entry *parent) { return 0; }
 
 #endif /* CONFIG_PROC_FS */
+
+#ifdef CONFIG_PROC_UID
+extern void proc_register_uid(kuid_t uid);
+#else
+static inline void proc_register_uid(kuid_t uid) {}
+#endif
 
 struct net;
 

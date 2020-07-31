@@ -65,7 +65,29 @@
 #include <asm/uaccess.h>
 #include <linux/mroute6.h>
 
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+#include <linux/android_aid.h>
+
+static inline int current_has_network(void)
+{
+	return in_egroup_p(AID_INET) || capable(CAP_NET_RAW);
+}
+#else
+static inline int current_has_network(void)
+{
+	return 1;
+}
+#endif
+
 #include "ip6_offload.h"
+
+#ifdef CONFIG_HW_QTAGUID_PID
+#include <huawei_platform/net/qtaguid_pid/qtaguid_pid.h>
+#endif
+
+#ifdef CONFIG_HW_DPIMARK_MODULE
+#include <huawei_platform/net/hw_dpi_mark/dpi_hw_hook.h>
+#endif
 
 MODULE_AUTHOR("Cast of dozens");
 MODULE_DESCRIPTION("IPv6 protocol stack for Linux");
@@ -106,8 +128,10 @@ static __inline__ struct ipv6_pinfo *inet6_sk_generic(struct sock *sk)
 	return (struct ipv6_pinfo *)(((u8 *)sk) + offset);
 }
 
-static int inet6_create(struct net *net, struct socket *sock, int protocol,
-			int kern)
+#ifndef CONFIG_MPTCP
+static
+#endif
+int inet6_create(struct net *net, struct socket *sock, int protocol, int kern)
 {
 	struct inet_sock *inet;
 	struct ipv6_pinfo *np;
@@ -120,6 +144,9 @@ static int inet6_create(struct net *net, struct socket *sock, int protocol,
 
 	if (protocol < 0 || protocol >= IPPROTO_MAX)
 		return -EINVAL;
+
+	if (!current_has_network())
+		return -EACCES;
 
 	/* Look for the requested type/protocol pair. */
 lookup_protocol:
@@ -167,8 +194,7 @@ lookup_protocol:
 	}
 
 	err = -EPERM;
-	if (sock->type == SOCK_RAW && !kern &&
-	    !ns_capable(net->user_ns, CAP_NET_RAW))
+	if (sock->type == SOCK_RAW && !kern && !capable(CAP_NET_RAW))
 		goto out_rcu_unlock;
 
 	sock->ops = answer->ops;
@@ -221,7 +247,12 @@ lookup_protocol:
 	inet->mc_index	= 0;
 	inet->mc_list	= NULL;
 	inet->rcv_tos	= 0;
-
+#if defined(CONFIG_HUAWEI_BASTET) || defined(CONFIG_HUAWEI_XENGINE)
+	sk->acc_state	= 0;
+#endif
+#if defined(CONFIG_HUAWEI_BASTET)
+	sk->discard_duration   = 0;
+#endif
 	if (net->ipv4.sysctl_ip_no_pmtu_disc)
 		inet->pmtudisc = IP_PMTUDISC_DONT;
 	else
@@ -257,6 +288,15 @@ lookup_protocol:
 		}
 	}
 out:
+#ifdef CONFIG_HW_QTAGUID_PID
+	if(!err)
+		qtaguid_pid_put(sk);
+#endif
+#ifdef CONFIG_HW_DPIMARK_MODULE
+	if (!err)
+		mplk_try_nw_bind_for_udp(sk);
+#endif
+
 	return err;
 out_rcu_unlock:
 	rcu_read_unlock();
@@ -680,6 +720,7 @@ int inet6_sk_rebuild_header(struct sock *sk)
 		fl6.flowi6_mark = sk->sk_mark;
 		fl6.fl6_dport = inet->inet_dport;
 		fl6.fl6_sport = inet->inet_sport;
+		fl6.flowi6_uid = sk->sk_uid;
 		security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
 
 		rcu_read_lock();

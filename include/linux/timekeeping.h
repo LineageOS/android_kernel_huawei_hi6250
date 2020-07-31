@@ -168,6 +168,7 @@ static inline void getboottime(struct timespec *ts)
 }
 #endif
 
+#define do_posix_clock_monotonic_gettime(ts) ktime_get_ts(ts)
 #define ktime_get_real_ts64(ts)	getnstimeofday64(ts)
 
 /*
@@ -249,6 +250,7 @@ static inline u64 ktime_get_raw_ns(void)
 
 extern u64 ktime_get_mono_fast_ns(void);
 extern u64 ktime_get_raw_fast_ns(void);
+extern u64 ktime_get_boot_fast_ns(void);
 
 /*
  * Timespec interfaces utilizing the ktime based ones

@@ -38,11 +38,16 @@
 int __initdata rd_doload;	/* 1 = load RAM disk, 0 = don't load */
 
 int root_mountflags = MS_RDONLY | MS_SILENT;
+
 static char * __initdata root_device_name;
 static char __initdata saved_root_name[64];
 static int root_wait;
 
 dev_t ROOT_DEV;
+
+#ifdef CONFIG_HISI_ENGINEER_MODE
+extern void engineer_mode_mount(void);
+#endif
 
 static int __init load_ramdisk(char *str)
 {
@@ -438,7 +443,7 @@ retry:
 out:
 	put_page(page);
 }
- 
+
 #ifdef CONFIG_ROOT_NFS
 
 #define NFSROOT_TIMEOUT_MIN	5
@@ -541,6 +546,9 @@ void __init mount_root(void)
 		mount_block_root("/dev/root", root_mountflags);
 	}
 #endif
+#ifdef CONFIG_HISI_ENGINEER_MODE
+	engineer_mode_mount();
+#endif
 }
 
 /*
@@ -566,6 +574,7 @@ void __init prepare_namespace(void)
 	wait_for_device_probe();
 
 	md_run_setup();
+	dm_run_setup();
 
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;

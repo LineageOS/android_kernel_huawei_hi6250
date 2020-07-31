@@ -61,9 +61,14 @@ struct input_id {
  * Note that input core does not clamp reported values to the
  * [minimum, maximum] limits, such task is left to userspace.
  *
- * Resolution for main axes (ABS_X, ABS_Y, ABS_Z) is reported in
- * units per millimeter (units/mm), resolution for rotational axes
- * (ABS_RX, ABS_RY, ABS_RZ) is reported in units per radian.
+ * The default resolution for main axes (ABS_X, ABS_Y, ABS_Z)
+ * is reported in units per millimeter (units/mm), resolution
+ * for rotational axes (ABS_RX, ABS_RY, ABS_RZ) is reported
+ * in units per radian.
+ * When INPUT_PROP_ACCELEROMETER is set the resolution changes.
+ * The main axes (ABS_X, ABS_Y, ABS_Z) are then reported in
+ * in units per g (units/g) and in units per degree per second
+ * (units/deg/s) for rotational axes (ABS_RX, ABS_RY, ABS_RZ).
  */
 struct input_absinfo {
 	__s32 value;
@@ -488,4 +493,22 @@ struct ff_effect {
 #define FF_MAX		0x7f
 #define FF_CNT		(FF_MAX+1)
 
+#ifdef CONFIG_HISI_VOLUMEKEY_COMBINATION
+/*
+ * combination keys(up+down+powerkey) to fastboot states
+ * volume up and down bit
+ */
+#define VOL_DOWN_BIT		(0)
+#define VOL_UP_BIT		(1)
+
+#define VOL_UPDOWN_PRESS		((1<<VOL_DOWN_BIT) | (1<<VOL_UP_BIT))
+#ifdef CONFIG_KEYBOARD_HISI_PMIC_GPIO_KEY
+extern void pmic_gpio_key_vol_updown_press_set_zero(void);
+extern int pmic_gpio_key_vol_updown_press_get(void);
+extern int is_pmic_gpio_key_vol_updown_pressed(void);
+#endif
+extern void gpio_key_vol_updown_press_set_zero(void);
+extern int gpio_key_vol_updown_press_get(void);
+extern int is_gpio_key_vol_updown_pressed(void);
+#endif
 #endif /* _UAPI_INPUT_H */

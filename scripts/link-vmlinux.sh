@@ -53,7 +53,38 @@ archive_builtin()
 		${AR} rcsT${KBUILD_ARFLAGS} built-in.o			\
 					${KBUILD_VMLINUX_INIT}		\
 					${KBUILD_VMLINUX_MAIN}
+
+		if [ -n "${CONFIG_LTO_CLANG}" ]; then
+			mv -f built-in.o built-in.o.tmp
+			${LLVM_AR} rcsT${KBUILD_ARFLAGS} built-in.o $(${AR} t built-in.o.tmp)
+			rm -f built-in.o.tmp
+		fi
 	fi
+}
+
+# If CONFIG_LTO_CLANG is selected, collect generated symbol versions into
+# .tmp_symversions
+modversions()
+{
+	if [ -z "${CONFIG_LTO_CLANG}" ]; then
+		return
+	fi
+
+	if [ -z "${CONFIG_MODVERSIONS}" ]; then
+		return
+	fi
+
+	rm -f .tmp_symversions
+
+	for a in built-in.o ${KBUILD_VMLINUX_LIBS}; do
+		for o in $(${AR} t $a); do
+			if [ -f ${o}.symversions ]; then
+				cat ${o}.symversions >> .tmp_symversions
+			fi
+		done
+	done
+
+	echo "-T .tmp_symversions"
 }
 
 # Link of vmlinux.o used for section mismatch analysis
@@ -70,7 +101,29 @@ modpost_link()
 			${KBUILD_VMLINUX_MAIN}				\
 			--end-group"
 	fi
-	${LD} ${LDFLAGS} -r -o ${1} ${objects}
+
+	if [ -n "${CONFIG_LTO_CLANG}" ]; then
+		# This might take a while, so indicate that we're doing
+		# an LTO link
+		info LTO vmlinux.o
+	else
+		info LD vmlinux.o
+	fi
+
+	${LD} ${LDFLAGS} -r -o ${1} $(modversions) ${objects}
+}
+
+# If CONFIG_LTO_CLANG is selected, we postpone running recordmcount until
+# we have compiled LLVM IR to an object file.
+recordmcount()
+{
+	if [ -z "${CONFIG_LTO_CLANG}" ]; then
+		return
+	fi
+
+	if [ -n "${CONFIG_FTRACE_MCOUNT_RECORD}" ]; then
+		scripts/recordmcount ${RECORDMCOUNT_FLAGS} $*
+	fi
 }
 
 # Link of vmlinux
@@ -82,7 +135,15 @@ vmlinux_link()
 	local objects
 
 	if [ "${SRCARCH}" != "um" ]; then
-		if [ -n "${CONFIG_THIN_ARCHIVES}" ]; then
+		local ld="${LD}"
+		local ldflags="${LDFLAGS} ${LDFLAGS_vmlinux}"
+
+		if [ -n "${LDFINAL_vmlinux}" ]; then
+			ld="${LDFINAL_vmlinux}"
+			ldflags="${LDFLAGS_FINAL_vmlinux} ${LDFLAGS_vmlinux}"
+		fi
+
+		if [[ -n "${CONFIG_THIN_ARCHIVES}" && -z "${CONFIG_LTO_CLANG}" ]]; then
 			objects="--whole-archive built-in.o ${1}"
 		else
 			objects="${KBUILD_VMLINUX_INIT}			\
@@ -92,8 +153,7 @@ vmlinux_link()
 				${1}"
 		fi
 
-		${LD} ${LDFLAGS} ${LDFLAGS_vmlinux} -o ${2}		\
-			-T ${lds} ${objects}
+		${ld} ${ldflags} -o ${2} -T ${lds} ${objects}
 	else
 		if [ -n "${CONFIG_THIN_ARCHIVES}" ]; then
 			objects="-Wl,--whole-archive built-in.o ${1}"
@@ -112,7 +172,6 @@ vmlinux_link()
 		rm -f linux
 	fi
 }
-
 
 # Create ${2} .o file with all symbols from the ${1} object file
 kallsyms()
@@ -141,9 +200,42 @@ kallsyms()
 
 	local afile="`basename ${2} .o`.S"
 
-	${NM} -n ${1} | scripts/kallsyms ${kallsymopt} > ${afile}
-	${CC} ${aflags} -c -o ${2} ${afile}
+	if [ -n "${CONFIG_HUAWEI_HIDESYMS}" ]; then
+		local src_blacklist="$(cd `dirname $0`; pwd)/hw_hidesyms_blacklist.txt"
+		local tmp_blacklist=".tmp_hw_hidesyms_blacklist.txt"
+		local debug_blacklist="debug_hw_hidesyms_blacklist.log"
+
+		# Delete the debug file if exist.
+		if [ -f "${debug_blacklist}" ]; then
+			rm ${debug_blacklist}
+		fi
+
+		# Get a pure blacklist
+		cat ${src_blacklist} | sed s/[[:space:]]//g | grep -v "#" | \
+			sed -e '/^$/d' > ${tmp_blacklist}
+
+		if [ -s "${tmp_blacklist}" ]; then
+			# Generate debug log
+			if [ -n "${CONFIG_HUAWEI_HIDESYMS_DEBUGFS}" ]; then
+				${NM} -n ${1} | grep -w -f ${tmp_blacklist} > ${debug_blacklist}
+			fi
+
+			${NM} -n ${1} | \
+				grep -vw -f ${tmp_blacklist} | \
+				scripts/kallsyms ${kallsymopt} > ${afile}
+			${CC} ${aflags} -c -o ${2} ${afile}
+		else
+			${NM} -n ${1} | scripts/kallsyms ${kallsymopt} > ${afile}
+			${CC} ${aflags} -c -o ${2} ${afile}
+		fi
+
+		rm ${tmp_blacklist}
+	else
+		${NM} -n ${1} | scripts/kallsyms ${kallsymopt} > ${afile}
+		${CC} ${aflags} -c -o ${2} ${afile}
+	fi
 }
+
 
 # Create map file with all symbols from ${1}
 # See mksymap for additional details
@@ -164,6 +256,7 @@ cleanup()
 	rm -f .tmp_System.map
 	rm -f .tmp_kallsyms*
 	rm -f .tmp_version
+	rm -f .tmp_symversions
 	rm -f .tmp_vmlinux*
 	rm -f built-in.o
 	rm -f System.map
@@ -209,15 +302,6 @@ case "${KCONFIG_CONFIG}" in
 	. "./${KCONFIG_CONFIG}"
 esac
 
-archive_builtin
-
-#link vmlinux.o
-info LD vmlinux.o
-modpost_link vmlinux.o
-
-# modpost vmlinux.o to check for section mismatches
-${MAKE} -f "${srctree}/scripts/Makefile.modpost" vmlinux.o
-
 # Update version
 info GEN .version
 if [ ! -r .version ]; then
@@ -228,8 +312,26 @@ else
 	expr 0$(cat .old_version) + 1 >.version;
 fi;
 
+archive_builtin
+
+#link vmlinux.o
+modpost_link vmlinux.o
+
+# modpost vmlinux.o to check for section mismatches
+${MAKE} -f "${srctree}/scripts/Makefile.modpost" vmlinux.o
+
 # final build of init/
 ${MAKE} -f "${srctree}/scripts/Makefile.build" obj=init GCC_PLUGINS_CFLAGS="${GCC_PLUGINS_CFLAGS}"
+
+if [ -n "${CONFIG_LTO_CLANG}" ]; then
+	# Re-use vmlinux.o, so we can avoid the slow LTO link step in
+	# vmlinux_link
+	KBUILD_VMLINUX_INIT=
+	KBUILD_VMLINUX_MAIN=vmlinux.o
+
+	# Call recordmcount if needed
+	recordmcount vmlinux.o
+fi
 
 kallsymso=""
 kallsyms_vmlinux=""

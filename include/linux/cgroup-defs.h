@@ -16,6 +16,7 @@
 #include <linux/percpu-refcount.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/workqueue.h>
+#include <linux/bpf-cgroup.h>
 
 #ifdef CONFIG_CGROUPS
 
@@ -65,6 +66,7 @@ enum {
 enum {
 	CGRP_ROOT_NOPREFIX	= (1 << 1), /* mounted subsystems have no named prefix */
 	CGRP_ROOT_XATTR		= (1 << 2), /* supports extended attributes */
+	CGRP_ROOT_CPUSET_NOPREFIX	= (1 << 3), /* only cpuset have no named prefix */
 };
 
 /* cftype->flags */
@@ -300,6 +302,9 @@ struct cgroup {
 
 	/* used to schedule release agent */
 	struct work_struct release_agent_work;
+
+	/* used to store eBPF programs */
+	struct cgroup_bpf bpf;
 
 	/* ids of the ancestors at each level including self */
 	int ancestor_ids[];

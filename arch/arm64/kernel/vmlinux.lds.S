@@ -60,7 +60,7 @@ jiffies = jiffies_64;
 #define TRAMP_TEXT					\
 	. = ALIGN(PAGE_SIZE);				\
 	VMLINUX_SYMBOL(__entry_tramp_text_start) = .;	\
-	*(.entry.tramp.text)				\
+	KEEP(*(.entry.tramp.text))			\
 	. = ALIGN(PAGE_SIZE);				\
 	VMLINUX_SYMBOL(__entry_tramp_text_end) = .;
 #else
@@ -146,12 +146,27 @@ SECTIONS
 		*(.got)			/* Global offset table		*/
 	}
 
+	. = ALIGN(32);
+	__start_hwlog_tag = .;
+	__start_hwlog_tag : {
+		*(__hwlog_tag)
+	}
 	. = ALIGN(SEGMENT_ALIGN);
+	__stop_hwlog_tag = .;
+
+	. = ALIGN(SEGMENT_ALIGN);
+	.cfc.text : {
+		CFC_TEXT
+	}
 	_etext = .;			/* End of text section */
 
-	RO_DATA(PAGE_SIZE)		/* everything from this point to     */
-	EXCEPTION_TABLE(8)		/* __init_begin will be marked RO NX */
+	RO_AFTER_INIT_SECTION(PAGE_SIZE)	/* everything from this point */
+	RO_DATA(PAGE_SIZE)			/* to __init_begin will be    */
+	EXCEPTION_TABLE(8)			/* marked RO NX		      */
 	NOTES
+	.cfc.data : {
+		CFC_DATA
+	}
 
 	. = ALIGN(SEGMENT_ALIGN);
 	__init_begin = .;
@@ -179,11 +194,11 @@ SECTIONS
 	. = ALIGN(4);
 	.altinstructions : {
 		__alt_instructions = .;
-		*(.altinstructions)
+		KEEP(*(.altinstructions))
 		__alt_instructions_end = .;
 	}
 	.altinstr_replacement : {
-		*(.altinstr_replacement)
+		KEEP(*(.altinstr_replacement))
 	}
 	.rela : ALIGN(8) {
 		*(.rela .rela*)
@@ -227,6 +242,11 @@ SECTIONS
 	. += IDMAP_DIR_SIZE;
 	swapper_pg_dir = .;
 	. += SWAPPER_DIR_SIZE;
+
+#ifdef CONFIG_ARM64_SW_TTBR0_PAN
+	reserved_ttbr0 = .;
+	. += RESERVED_TTBR0_SIZE;
+#endif
 
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
 	tramp_pg_dir = .;

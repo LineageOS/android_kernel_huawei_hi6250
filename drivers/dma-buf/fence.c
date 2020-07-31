@@ -26,6 +26,11 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/fence.h>
 
+#ifdef CONFIG_HW_ZEROHUNG
+#include <chipset_common/hwzrhung/zrhung.h>
+#include "sync_debug.h"
+#endif
+
 EXPORT_TRACEPOINT_SYMBOL(fence_annotate_wait_on);
 EXPORT_TRACEPOINT_SYMBOL(fence_emit);
 
@@ -67,6 +72,8 @@ int fence_signal_locked(struct fence *fence)
 {
 	struct fence_cb *cur, *tmp;
 	int ret = 0;
+
+	lockdep_assert_held(fence->lock);
 
 	if (WARN_ON(!fence))
 		return -EINVAL;
@@ -158,9 +165,6 @@ fence_wait_timeout(struct fence *fence, bool intr, signed long timeout)
 
 	if (WARN_ON(timeout < 0))
 		return -EINVAL;
-
-	if (timeout == 0)
-		return fence_is_signaled(fence);
 
 	trace_fence_wait_start(fence);
 	ret = fence->ops->wait(fence, intr, timeout);
@@ -329,8 +333,12 @@ fence_remove_callback(struct fence *fence, struct fence_cb *cb)
 	spin_lock_irqsave(fence->lock, flags);
 
 	ret = !list_empty(&cb->node);
-	if (ret)
+	if (ret) {
 		list_del_init(&cb->node);
+		if (list_empty(&fence->cb_list))
+			if (fence->ops->disable_signaling)
+				fence->ops->disable_signaling(fence);
+	}
 
 	spin_unlock_irqrestore(fence->lock, flags);
 
@@ -556,3 +564,19 @@ fence_init(struct fence *fence, const struct fence_ops *ops,
 	trace_fence_init(fence);
 }
 EXPORT_SYMBOL(fence_init);
+
+
+#ifdef CONFIG_HW_ZEROHUNG
+void fencewp_report(long timeout, bool dump)
+{
+	char fence_buf[128] = {0};
+
+	if (dump == true) {
+		sync_dump();
+	}
+
+
+	snprintf(fence_buf, sizeof(fence_buf), "fence timeout after %dms\n", jiffies_to_msecs(timeout));
+	zrhung_send_event(ZRHUNG_WP_FENCE, "K", fence_buf);
+}
+#endif

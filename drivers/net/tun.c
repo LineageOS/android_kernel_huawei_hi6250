@@ -1112,6 +1112,10 @@ static void tun_net_init(struct net_device *dev)
 
 		break;
 	}
+#ifdef CONFIG_MPTCP
+	if (dev)
+		dev->flags |= IFF_NOMULTIPATH;
+#endif
 }
 
 /* Character device part */
@@ -1284,6 +1288,10 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		kfree_skb(skb);
 		return -EINVAL;
 	}
+
+	if (!(tun->flags & IFF_NO_PI))
+		if (pi.flags & htons(CHECKSUM_UNNECESSARY))
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 	switch (tun->flags & TUN_TYPE_MASK) {
 	case IFF_TUN:
@@ -2020,6 +2028,12 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 	unsigned int ifindex;
 	int le;
 	int ret;
+
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+	if (cmd != TUNGETIFF && !capable(CAP_NET_ADMIN)) {
+		return -EPERM;
+	}
+#endif
 
 	if (cmd == TUNSETIFF || cmd == TUNSETQUEUE || _IOC_TYPE(cmd) == 0x89) {
 		if (copy_from_user(&ifr, argp, ifreq_len))

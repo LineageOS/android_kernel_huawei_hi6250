@@ -98,7 +98,20 @@
 	__x & BIT(VA_BITS - 1) ? (__x & ~PAGE_OFFSET) + PHYS_OFFSET :	\
 				 (__x - kimage_voffset); })
 
+#if defined(__ASSEMBLER__) || !defined(CONFIG_HISI_LB_DEBUG)
 #define __phys_to_virt(x)	((unsigned long)((x) - PHYS_OFFSET) | PAGE_OFFSET)
+#else
+
+#if defined(CONFIG_HISI_LB_DEBUG)
+extern void __lb_assert_phys(phys_addr_t phys);
+#define lb_assert_phys __lb_assert_phys
+#endif
+
+#define __phys_to_virt(x) ({\
+	lb_assert_phys(x); \
+	((unsigned long)((x) - PHYS_OFFSET) | PAGE_OFFSET); \
+	})
+#endif
 #define __phys_to_kimg(x)	((unsigned long)((x) + kimage_voffset))
 
 /*
@@ -143,6 +156,7 @@
 #include <linux/mmdebug.h>
 
 extern s64			memstart_addr;
+extern s64			phystart_addr;
 /* PHYS_OFFSET - the physical address of the start of memory. */
 #define PHYS_OFFSET		({ VM_BUG_ON(memstart_addr & 1); memstart_addr; })
 
@@ -151,6 +165,11 @@ extern u64			kimage_vaddr;
 
 /* the offset between the kernel virtual and physical mappings */
 extern u64			kimage_voffset;
+
+static inline unsigned long kaslr_offset(void)
+{
+	return kimage_vaddr - KIMAGE_VADDR;
+}
 
 /*
  * Allow all memory at the discovery stage. We will clip it later.
@@ -166,7 +185,7 @@ extern u64			kimage_voffset;
  * direct-mapped view.  We assume this is the first page
  * of RAM in the mem_map as well.
  */
-#define PHYS_PFN_OFFSET	(PHYS_OFFSET >> PAGE_SHIFT)
+#define PHYS_PFN_OFFSET	(phystart_addr >> PAGE_SHIFT)
 
 /*
  * Note: Drivers should NOT use these.  They are the wrong
@@ -192,6 +211,7 @@ static inline void *phys_to_virt(phys_addr_t x)
 #define __va(x)			((void *)__phys_to_virt((phys_addr_t)(x)))
 #define pfn_to_kaddr(pfn)	__va((pfn) << PAGE_SHIFT)
 #define virt_to_pfn(x)      __phys_to_pfn(__virt_to_phys(x))
+#define sym_to_pfn(x)	    __phys_to_pfn(__pa_symbol(x))
 
 /*
  *  virt_to_page(k)	convert a _valid_ virtual address to struct page *
